@@ -1,725 +1,432 @@
 <?php
 /**
- * BULLETPROOF,  
+ * BulletProof
  *
- * This is a one-file solution for a quick and safe way of
- * uploading, watermarking, cropping and resizing images
- * during and after uploads with PHP with best security.
+ * A single class PHP-library for secure image uploading.
  *
- * This class is heavily commented, to be as much friendly as possible.
- * Please help out by posting out some bugs/flaws if you encounter any. Thanks!
+ * PHP support 5.3+
  *
- * @category    Image uploader
  * @package     BulletProof
- * @version     1.4.0
- * @author      samayo 
- * @link        https://github.com/samayo/BulletProof
- * @license     Luke 3:11 ( Free )
+ * @version     2.0.0
+ * @author      Samayo  /@sama_io
+ * @link        https://github.com/samayo/bulletproof
+ * @license     MIT
  */
-namespace ImageUploader;
+namespace BulletProof;
 
-class ImageUploaderException extends \Exception {}
-
-
-class BulletProof
+class Image implements \ArrayAccess
 {
-
-    /*
-    |--------------------------------------------------------------------------
-    | Image Upload Properties
-    \--------------------------------------------------------------------------*/
+    /**
+     * @var string The new image name, to be provided or will be generated.
+     */
+    protected $name;
 
     /**
-     * Set a group of default image types to upload.
-     * @var array
+     * @var int The image width in pixels
      */
-    protected $imageType = array("jpg", "jpeg", "png", "gif");
+    protected $width;
 
     /**
-     * Set a default file size to upload. Values are in bytes. Remember: 1kb ~ 1000 bytes.
-     * @var array
+     * @var int The image height in pixels
      */
-    protected $imageSize = array("min" => 1, "max" => 30000);
+    protected $height;
 
     /**
-     * Set a default min & maximum height & width for image to upload.
-     * @var array
+     * @var string The image mime type (extension)
      */
-    protected $imageDimension = array("height"=>1000, "width"=>1000);
+    protected $mime;
 
     /**
-     * Set a default folder to upload images, if it does not exist, it will be created.
-     * @var string
+     * @var string The full image path (dir + image + mime)
      */
-    protected $uploadDir = "uploads";
-    
-    /**
-     * To get the real image/mime type. i.e gif, jpeg, png, ....
-     * @var string
-     */
-    protected $getMimeType;
-
-
-    /*
-    |--------------------------------------------------------------------------
-    | Image Resize and Crop Properties
-    \------------------------------------------------------------------------*/
+    protected $fullPath;
 
     /**
-     * Image dimensions for resizing or shrinking ex: array("height"=>100, "width"=>100)
-     * @var array
+     * @var string The folder or image storage location
      */
-    protected $shrinkImageTo = array();
+    protected $location;
 
     /**
-     * Whether or not to keep the ratio of the original image while resizing
-     * @var boolean
+     * @var array A json format of all information about an image
      */
-    protected $shrinkRatio;
+    protected $serialize = array();
 
     /**
-     * Whether or not to allow upsizing of an image when applying the shrink command.
-     * @var boolean
+     * @var array The min and max image size allowed for upload (in bytes)
      */
-    protected $shrinkUpsize;
+    protected $size = array(100, 50000);
 
     /**
-     * New image dimensions for image cropping ex: array("height"=>100, "width"=>100)
-     * @var array
+     * @var array The max height and width image allowed
      */
-    protected $cropImageTo  = array();
-
-
-    /*
-    |--------------------------------------------------------------------------
-    | Image Watermark and Crop Properties
-    \-------------------------------------------------------------------------*/
+    protected $dimensions = array(500, 5000);
 
     /**
-     * Name of the image to use as a watermark. ( best to use a png  image )
-     * @var string
+     * @var array The mime types allowed for upload
      */
-    protected $getWatermark;
+    protected $mimeTypes = array("jpeg", "png", "gif");
 
     /**
-     * Watermark Position. (Where to put the watermark). ex: 'center', 'top-right', 'bottom-left'....
-     * @var string
+     * @var array list of known image types
      */
-    protected $getWatermarkPosition;
+    protected $imageMimes = array(
+        1 => "gif", "jpeg", "png", "swf", "psd",
+        "bmp", "tiff", "jpc", "jp2", "jpx",
+        "jb2", "swc", "iff", "wbmp", "xmb", "ico"
+    );
 
     /**
-     * Size ( Width & Height ) of the watermark ex: 'array("height"=>40, "width"=>20)'.
-     * @var array
+     * @var array storage for the $_FILES global array
      */
-    protected $getWatermarkDimensions;
-
-
-    /*
-    |--------------------------------------------------------------------------
-    | Image Upload Methods
-    \--------------------------------------------------------------------------*/
+    private $_files = array();
 
     /**
-     * Stores image types to upload
-     *
-     * @param array $fileTypes -  ex: ['jpg', 'doc', 'txt'].
-     * @return $this
+     * @var string storage for any errors
      */
-    public function fileTypes(array $fileTypes)
+    private $error = "";
+
+    /**
+     * @param array $_files represents the $_FILES array passed as dependancy
+     */
+    public function __construct(array $_files = [])
     {
-        $this->imageType = $fileTypes;
-        return $this;
+        $this->_files = $_files;
     }
 
     /**
-     * Minimum and Maximum allowed image size for upload (in bytes),
+     * Gets the real image mime type
      *
-     * @param array $fileSize - ex: ['min'=>500, 'max'=>1000]
-     * @return $this
+     * @param $tmp_name string The upload tmp directory
+     *
+     * @return bool|string
      */
-    public function limitSize(array $fileSize)
+    protected function getImageMime($tmp_name)
     {
-        $this->imageSize = $fileSize;
-        return $this;
+        if (isset($this->imageMimes[exif_imagetype($tmp_name)])) {
+            return $this->imageMimes [exif_imagetype($tmp_name)];
+        }
+        return false;
     }
 
     /**
-     * Default & maximum allowed height and width image to download.
-     *
-     * @param array $dimensions
-     * @return $this
+     * array offset \ArrayAccess
+     * unused
      */
-    public function limitDimension(array $dimensions){
-        $this->imageDimension = $dimensions;
-        return $this;
-    }
+    public function offsetSet($offset, $value){}
+    public function offsetExists($offset){}
+    public function offsetUnset($offset){}
 
     /**
-     * Get the real image's Extension/mime type
+     * Gets array value \ArrayAccess
      *
-     * @param $imageName
-     * @return mixed
-     * @throws ImageUploaderException
+     * @param mixed $offset
+     *
+     * @return bool|mixed
      */
-    protected function getMimeType($imageName)
-    {   
-        if(!file_exists($imageName)){
-            throw new ImageUploaderException("Image " . $imageName . " does not exist");
+    public function offsetGet($offset)
+    {
+        if ($offset == "error") {
+            return $this->error;
         }
 
-        $listOfMimeTypes = array(
-        1 => "gif", "jpeg", "png",  "swf", "psd",
-             "bmp", "tiff", "tiff", "jpc", "jp2",
-             "jpx", "jb2",  "swc",  "iff", "wbmp",
-             "xmb", "ico"
-        );
-
-        if(isset($listOfMimeTypes[ exif_imagetype($imageName) ])){
-            return $listOfMimeTypes[ exif_imagetype($imageName) ];
+        if (isset($this->_files[$offset]) && file_exists($this->_files[$offset]["tmp_name"])) {
+            $this->_files = $this->_files[$offset];
+            return true;
         }
+        
+        return false;
     }
 
     /**
-     * Handy method for getting image dimensions (W & H) in pixels.
+     * Renames image
      *
-     * @param $getImage - The image name
-     * @return array
-     */
-    protected function getPixels($getImage)
-    {
-        list($width, $height) = getImageSize($getImage);
-        return array("width"=>$width, "height"=>$height);
-    }
-
-    /**
-     * Calculate the new size of the image.
-     * Has the ability to keep the original ratio of the image. Can prevent upsizing of an image.
+     * @param null $isNameGiven if null, image will be auto-generated
      *
-     * @param array $oldImage
-     * @return array
+     * @return $this
      */
-    protected function getNewImageSize($oldImage)
-    {
-
-        // If the ratio needs to be kept.
-        if ($this->shrinkRatio) {
-            $width = $this->shrinkImageTo["width"];
-            // First, calculate the height.
-            $height = intval($width / $oldImage["width"] * $oldImage["height"]);
-
-            // If the height is too large, set it to the maximum height and calculate the width.
-            if ($height > $this->shrinkImageTo["height"]) {
-
-                $height = $this->shrinkImageTo["height"];
-                $width = intval($height / $oldImage["height"] * $oldImage["width"]);
-            }
-
-            // If we don't allow upsizing check if the new width or height are too big.
-            if (! $this->shrinkUpsize) {
-                // If the given width is larger then the image height, then resize it.
-                if ($width > $oldImage["width"]) {
-                    $width = $oldImage["width"];
-                    $height = intval($width / $oldImage["width"] * $oldImage["height"]);
-                }
-
-                // If the given height is larger then the image height, then resize it.
-                if ($height > $oldImage["height"]) {
-                    $height = $oldImage["height"];
-                    $width = intval($height / $oldImage["height"] * $oldImage["width"]);
-                }
-            }
-
-        } else {
-            $width = $this->shrinkImageTo["width"];
-            $height = $this->shrinkImageTo["height"];
-        }
-
-        return array(
-            "width" => $width,
-            "height" => $height
-        );
-    }
-
-    /**
-     * Rename file either from method or by generating a random one.
-     *
-     * @param $isNameProvided - A new name for the file. 
-     * @return string
-     */
-    protected function imageRename($isNameProvided)
+    public function setName($isNameProvided = null)
     {
         if ($isNameProvided) {
-            return $isNameProvided . "." . $this->getMimeType;
+            $this->name = filter_var($isNameProvided, FILTER_SANITIZE_STRING);
         }
-        return uniqid(true)."_".str_shuffle(implode(range("E", "Q"))) . "." . $this->getMimeType;
-    }
-
-    /**
-     * Get the specified upload dir, if it does not exist, create a new one.
-     *
-     * @param $directoryName - directory name where you want your files to be uploaded
-     * @param $filePermissions - octal representation of file permissions in linux environment
-     * @return $this
-     * @throws ImageUploaderException
-     */
-    public function uploadDir($directoryName, $filePermissions = 0666)
-    {
-        if (!file_exists($directoryName) && !is_dir($directoryName)) {
-            $createFolder = mkdir("" . $directoryName, $filePermissions, true);
-            if (!$createFolder) {
-                throw new ImageUploaderException("Folder " . $directoryName . " could not be created");
-            }
-        }
-        $this->uploadDir = $directoryName;
+        
         return $this;
     }
 
     /**
-     * For getting common error messages from FILES[] array during upload.
+     * Define a mime type for uploading
      *
-     * @return array
+     * @param array $fileTypes
+     *
+     * @return $this
      */
-    protected function commonUploadErrors($key)
+    public function setMime(array $fileTypes)
     {
-        $uploadErrors = array(
-            UPLOAD_ERR_OK           => "...",
-            UPLOAD_ERR_INI_SIZE     => "File is larger than the specified amount set by the server",
-            UPLOAD_ERR_FORM_SIZE    => "File is larger than the specified amount specified by browser",
-            UPLOAD_ERR_PARTIAL      => "File could not be fully uploaded. Please try again later",
-            UPLOAD_ERR_NO_FILE      => "File is not found",
+        $this->mimeTypes = $fileTypes;
+        return $this;
+    }
+
+    /**
+     * Define a min and max image size for uploading
+     *
+     * @param $min int minimum value in bytes
+     * @param $max int maximum value in bytes
+     *
+     * @return $this
+     */
+    public function setSize($min, $max)
+    {
+        $this->size = array($min, $max);
+        return $this;
+    }
+
+    /**
+     * Creates a location for upload storage
+     *
+     * @param $dir string the folder name to create
+     * @param int $permission chmod permission
+     *
+     * @return $this
+     */
+    public function setLocation($dir = "bulletproof", $permission = 0666)
+    {
+        if (!file_exists($dir) && !is_dir($dir) && !$this->location) {
+            $createFolder = @mkdir("" . $dir, (int) $permission, true);
+            if (!$createFolder) {
+                $this->error = "Folder " . $dir . " could not be created";
+                return;
+            }
+        }
+
+        $this->location = $dir;
+        return $this;
+    }
+
+    /**
+     * Sets acceptable max image height and width
+     *
+     * @param $maxWidth int max width value
+     * @param $maxHeight int max height value
+     *
+     * @return $this
+     */
+    public function setDimension($maxWidth, $maxHeight)
+    {
+        $this->dimensions = array($maxWidth, $maxHeight);
+        return $this;
+    }
+
+    /**
+     * Returns the image name
+     *
+     * @return string
+     */
+    public function getName()
+    {
+        if (!$this->name) {
+           return  uniqid(true) . "_" . str_shuffle(implode(range("e", "q")));
+        }
+
+        return $this->name;
+    }
+
+    /**
+     * Returns the full path of the image ex "location/image.mime"
+     *
+     * @return string
+     */
+    public function getFullPath()
+    {
+        $this->fullPath = $this->location . "/" . $this->name . "." . $this->mime;
+        return $this->fullPath;
+    }
+
+    /**
+     * Returns the image size in bytes
+     *
+     * @return int
+     */
+    public function getSize()
+    {
+        return (int) $this->_files["size"];
+    }
+
+    /**
+     * Returns the image height in pixels
+     *
+     * @return int
+     */
+    public function getHeight()
+    {
+        if ($this->height != null) {
+            return $this->height;
+        }
+
+        list(, $height) = getImageSize($this->_files["tmp_name"]); 
+        return $height;
+    }
+
+    /**
+     * Returns the image width
+     *
+     * @return int
+     */
+    public function getWidth()
+    {
+        if ($this->width != null) {
+            return $this->width;
+        }
+
+        list($width) = getImageSize($this->_files["tmp_name"]); 
+        return $width;
+    }
+
+    /**
+     * Returns the storage / folder name
+     *
+     * @return string
+     */
+    public function getLocation()
+    {
+        if(!$this->location){
+            $this->setLocation(); 
+        }
+
+        return $this->location; 
+    }
+
+    /**
+     * Returns a JSON format of the image width, height, name, mime ...
+     *
+     * @return string
+     */
+    public function getJson()
+    {
+        return json_encode($this->serialize);
+    }
+
+    /**
+     * Returns the image mime type
+     *
+     * @return string
+     */
+    public function getMime()
+    {
+        return $this->mime;
+    }
+
+    /**
+     * Checks for the common upload errors
+     *
+     * @param $e int error constant
+     */
+    protected function uploadErrors($e)
+    {
+        $errors = array(
+            UPLOAD_ERR_OK           => "",
+            UPLOAD_ERR_INI_SIZE     => "Image is larger than the specified amount set by the server",
+            UPLOAD_ERR_FORM_SIZE    => "Image is larger than the specified amount specified by browser",
+            UPLOAD_ERR_PARTIAL      => "Image could not be fully uploaded. Please try again later",
+            UPLOAD_ERR_NO_FILE      => "Image is not found",
             UPLOAD_ERR_NO_TMP_DIR   => "Can't write to disk, due to server configuration ( No tmp dir found )",
             UPLOAD_ERR_CANT_WRITE   => "Failed to write file to disk. Please check you file permissions",
             UPLOAD_ERR_EXTENSION    => "A PHP extension has halted this file upload process"
         );
-
-        return $uploadErrors[$key];
-    }
-
-
-    /*
-    |--------------------------------------------------------------------------
-    | Image Watermark Methods
-    \--------------------------------------------------------------------------*/
-
-    /**
-     * Get the watermark image and its position.
-     *
-     * @param $watermark - the watermark name, ex: 'logo.png'
-     * @param $watermarkPosition - position to put the watermark, ex: 'center'
-     * @return $this
-     * @throws ImageUploaderException
-     */
-    public function watermark($watermark, $watermarkPosition = null)
-    {
-        if (!file_exists($watermark)) {
-            throw new ImageUploaderException(" Please provide valid image to use as watermark ");
-        }
-        $this->getWatermark = $watermark;
-        $this->getWatermarkPosition = $watermarkPosition;
-        return $this;
+        return $errors[$e];
     }
 
     /**
-     * Calculate position and apply image watermark.
+     * Main upload method.
+     * This is where all the monkey business happens
      *
-     * The objective is to let position of watermarking be passed in simple English words like:
-     * 'center', 'right-top', 'bottom-left'.. as the second argument for the 'watermark()' method
-     * then take that word and do the real offset & marginal-calculation in this method.
-     *
-     * @param $imageName
-     * @throws ImageUploaderException
+     * @return $this|bool
      */
-    protected function applyWatermark($imageName)
+    public function upload()
     {
-        if (!$this->getWatermark) {
+        /* modify variable names for convenience */
+        $image = $this; 
+        $files = $this->_files;
+
+        /* initialize image properties */
+        $image->name     = $image->getName();
+        $image->width    = $image->getWidth();
+        $image->height   = $image->getHeight(); 
+        $image->location = $image->getLocation();
+
+        /* get image sizes */
+        list($minSize, $maxSize) = $image->size;
+
+        /* check for common upload errors */
+        if($image->error = $image->uploadErrors($files["error"])){
             return ;
         }
 
-        // Calculate the watermark position
-        $image      = $this->getPixels($imageName); 
-        $watermark  = $this->getPixels($this->getWatermark);
+        /* check image for valid mime types and return mime */
+        $image->mime = $image->getImageMime($files["tmp_name"]);
 
-        switch ($this->getWatermarkPosition) {
-            case "center":
-                $marginBottom  =   round($image["height"] / 2);
-                $marginRight   =   round($image["width"] / 2) - round($watermark["width"] / 2);
-                break;
+        /* validate image mime type */
+        if (!in_array($image->mime, $image->mimeTypes)) {
+            $ext = implode(", ", $image->mimeTypes);
+            $image->error = "Invalid File! Only ($ext) image types are allowed";
+            return ;
+        }     
 
-            case "top-left":
-                $marginBottom  =   round($image["height"] - $watermark["height"]);
-                $marginRight   =   round($image["width"] - $watermark["width"]);
-                break;
-
-            case "bottom-left":
-                $marginBottom  =   5;
-                $marginRight   =   round($image["width"] - $watermark["width"]);
-                break;
-
-            case "top-right":
-                $marginBottom  =   round($image["height"] - $watermark["height"]);
-                $marginRight   =   5;
-                break;
-
-            default:
-                $marginBottom  =   2;
-                $marginRight   =   2;
-                break;
+        /* check image size based on the settings */
+        if ($files["size"] < $minSize || $files["size"] > $maxSize) {
+            $min = intval($minSize / 1000) ?: 1; $max = intval($maxSize / 1000);
+            
+            $image->error = "Image size should be atleast more than min: $min and less than max: $max kb";
+            return ;
         }
 
-        // Apply the watermark using the calculated position
-        $this->getWatermarkDimensions = $this->getPixels($this->getWatermark);
+        /* check image dimension */
+        list($allowedHeight, $allowedWidth) = $image->dimensions;
 
-        $imageType = $this->getMimeType($imageName);
-        $watermark = imagecreatefrompng($this->getWatermark);
-
-
-        switch ($imageType) {
-            case "jpeg":
-            case "jpg":
-                $createImage = imagecreatefromjpeg($imageName);
-                break;
-
-            case "png":
-                $createImage = imagecreatefrompng($imageName);
-                break;
-
-            case "gif":
-                $createImage = imagecreatefromgif($imageName);
-                break;
-
-            default:
-                $createImage = imagecreatefromjpeg($imageName);
-                break;
+        if ($image->height > $allowedHeight || $image->width > $allowedWidth) {
+            $image->error = "Image height/width should be less than ' $allowedHeight \ $allowedWidth ' pixels";
+            return ;
         }
 
-        $sx = imagesx($watermark);
-        $sy = imagesy($watermark);
-        imagecopy(
-            $createImage,
-            $watermark,
-            imagesx($createImage) - $sx - $marginRight,
-            imagesy($createImage) - $sy - $marginBottom,
-            0,
-            0,
-            imagesx($watermark),
-            imagesy($watermark)
-        );
-    
-
-        switch ($imageType) {
-            case "jpeg":
-            case "jpg":
-                 imagejpeg($createImage, $imageName);
-                break;
-
-            case "png":
-                 imagepng($createImage, $imageName);
-                break;
-
-            case "gif":
-                 imagegif($createImage, $imageName);
-                break;
-
-            default:
-                throw new ImageUploaderException("A watermark can only be applied to: jpeg, jpg, gif, png images ");
-                break;
+        if($image->height < 4 || $image->width < 4){
+            $image->error = "Invalid! Image height/width is too small or maybe corrupted"; 
+            return ;
         }
-    }
-    
+ 
+        /* set and get folder name */
+        $image->fullPath = $image->location. "/" . $image->name . "." . $image->mime;
 
-    /*
-    |--------------------------------------------------------------------------
-    | Image Shrink/Resize Properties
-    \--------------------------------------------------------------------------*/
-
-    /**
-     * Get the Width and Height of the image image to shrink (in pixels)
-     *
-     * @param array $setImageDimensions
-     * @return $this
-     */
-    public function shrink(array $setImageDimensions, $ratio = false, $upsize = true)
-    {
-        $this->shrinkImageTo = $setImageDimensions;
-        $this->shrinkRatio = $ratio;
-        $this->shrinkUpsize = $upsize;
-        return $this;
-    }
-
-    /**
-     * Shrink the image.
-     *
-     * @param $fileName - the file name
-     * @param $imageName - the file to upload
-     * @throws ImageUploaderException
-     */
-    protected function applyShrink($fileName, $imageName)
-    {
-
-        if (!$this->shrinkImageTo) {
-            return;
-        }
-
-        $oldImage = $this->getPixels($imageName);
-        $newImage = $this->getNewImageSize($oldImage, false);
-
-        $imgString = file_get_contents($imageName);
-
-        $image = imagecreatefromstring($imgString);
-        $tmp = imagecreatetruecolor($newImage["width"], $newImage["height"]);
-        imagecopyresampled(
-            $tmp,
-            $image,
-            0,
-            0,
-            0,
-            0,
-            $newImage["width"],
-            $newImage["height"],
-            $oldImage["width"],
-            $oldImage["height"]
+        /* gather image info for json storage */ 
+        $image->serialize = array(
+            "name"     => $image->name,
+            "mime"     => $image->mime,
+            "height"   => $image->height,
+            "width"    => $image->width,
+            "size"     => $files["size"],
+            "location" => $image->location,
+            "fullpath" => $image->fullPath
         );
 
-        $mimeType = $this->getMimeType($fileName);
-
-        switch ($mimeType) {
-            case "jpeg":
-            case "jpg":
-                imagejpeg($tmp, $imageName, 100);
-                break;
-            case "png":
-                imagepng($tmp, $imageName, 0);
-                break;
-            case "gif":
-                imagegif($tmp, $imageName);
-                break;
-            default:
-                throw new ImageUploaderException(" Only jpg, jpeg, png and gif files can be resized ");
-                break;
-        }
-    }
-
-
-    /*
-    |--------------------------------------------------------------------------
-    | Image Crop Methods. 
-    \--------------------------------------------------------------------------*/
-
-    /**
-     * Get size dimensions to use for new image cropping
-     *
-     * @param array $imageCropValues
-     * @return $this
-     */
-    public function crop(array $imageCropValues)
-    {
-        $this->cropImageTo = $imageCropValues;
-        return $this;
-    }
-
-    /**
-     * Apply crop image, from the given size
-     *
-     * @param $imageName
-     * @param $tmp_name
-     * @return resource
-     * @throws ImageUploaderException
-     */
-    protected function applyCrop($imageName, $tmp_name)
-    {
-
-        if (!$this->cropImageTo) {
-            return ;
-        }
-
-        $mimeType = $this->getMimeType($imageName);
-
-        switch ($mimeType) {
-            case "jpg":
-            case "jpeg":
-                $imageCreate = imagecreatefromjpeg($tmp_name);
-                break;
-
-            case "png":
-                $imageCreate = imagecreatefrompng($tmp_name);
-                break;
-
-            case "gif":
-                $imageCreate = imagecreatefromgif($tmp_name);
-                break;
-
-            default:
-                throw new ImageUploaderException(" Only gif, jpg, jpeg and png files can be cropped ");
-                break;
-        }
-
-        // Uploaded image pixels.
-        $image = $this->getPixels($tmp_name);
-        $crop = $this->cropImageTo;
-
-        // The image offsets/coordination to crop the image.
-        $widthTrim = ceil(($image["width"] - $crop["width"]) / 2);
-        $heightTrim = ceil(($image["height"] - $crop["height"]) / 2);
-
-        // Can't crop a 100X100 image, to 200X200. Image can only be cropped to smaller size.
-        if ($widthTrim < 0 && $heightTrim < 0) {
-            return ;
-        }
-
-        $temp = imagecreatetruecolor($crop["width"], $crop["height"]);
-                imagecopyresampled(
-                    $temp,
-                    $imageCreate,
-                    0,
-                    0,
-                    $widthTrim,
-                    $heightTrim,
-                    $crop["width"],
-                    $crop["height"],
-                    $crop["width"],
-                    $crop["height"]
-                );
-
-
-        if (!$temp) {
-            throw new ImageUploaderException("Failed to crop image. Please pass the right parameters");
-        } else {
-            imagejpeg($temp, $tmp_name);
-        }
-
-    }
-
-
-    /*
-    |--------------------------------------------------------------------------
-    | Not Upload Related. 
-    \--------------------------------------------------------------------------*/
-
-    /**
-     * Without uploading, just crop/watermark/shrink all images in your folders
-     *
-     * @param $action - the task.. ex: 'crop', 'watermark', 'shrink'...
-     * @param $imageName - the image you want to change. Provide full path pls.
-     * @throws ImageUploaderException
-     */
-    public function change($action, $imageName){
-
-        if(empty($action) || !file_exists($imageName)){
-            throw new ImageUploaderException(__FUNCTION__." needs two arguments. the Task and Image name");
-        }
-
-        if($action == "watermark" && 
-            $this->getWatermark)
-        {
-            $this->applyWatermark($imageName);
-            return true;
-        }
-
-        if($action == "shrink" &&
-            $this->shrinkImageTo)
-        {
-            $this->applyShrink($imageName, $imageName);
-            return true;
-        }
-
-        if($action == "crop" && 
-            $this->cropImageTo)
-        {
-            $this->applyCrop($imageName, $imageName);
-            return true;
+        if ($image->error === "") {
+            $moveUpload = $image->moveUploadedFile($files["tmp_name"], $image->fullPath);
+            if (false !== $moveUpload) {
+                return $image;
+            }
         }
         
-        throw new ImageUploaderException("Unknown directive given to function ". __FUNCTION__);
-        
+        $image->error = "Upload failed, Unknown error occured";
+        return false;
     }
 
     /**
-     * Simple file check and delete wrapper.
+     * Final upload method to be called, isolated for testing purposes
      *
-     * @param $fileToDelete
+     * @param $tmp_name int the temporary location of the image file
+     * @param $destination int upload destination
+     *
      * @return bool
-     * @throws ImageUploaderException
      */
-    public function deleteFile($fileToDelete){
-        if (file_exists($fileToDelete) && !unlink($fileToDelete)) {
-            throw new ImageUploaderException("File may have been deleted or does not exist");
-        }
-        return true;
-    }
-
-    /**
-     * Final image uploader method, to check for errors and upload
-     *
-     * @param $fileToUpload
-     * @param null $isNameProvided
-     * @return string
-     * @throws ImageUploaderException
-     */
-    public function upload($fileToUpload, $isNameProvided = null)
+    public function moveUploadedFile($tmp_name, $destination)
     {
-       
-       if(!function_exists('exif_imagetype')){
-        throw new ImageUploaderException("Function 'exif_imagetype' Not found.");
-       }
-
-         // Check if any errors are thrown by the FILES[] array
-        if ($fileToUpload["error"]) {
-            throw new ImageUploaderException($this->commonUploadErrors($fileToUpload["error"]));
-        }
-
-        // First get the real file extension
-        $this->getMimeType = $this->getMimeType($fileToUpload["tmp_name"]);
-
-        // Check if this file type is allowed for upload
-        if (!in_array($this->getMimeType, $this->imageType)) {
-            throw new ImageUploaderException(" This is not allowed file type!
-             Please only upload ( " . implode(", ", $this->imageType) . " ) file types");
-        }
-
-        //Check if size (in bytes) of the image are above or below of defined in 'limitSize()' 
-        if ($fileToUpload["size"] < $this->imageSize["min"] ||
-            $fileToUpload["size"] > $this->imageSize["max"]
-        ) {
-            throw new ImageUploaderException("File sizes must be between " .
-                implode(" to ", $this->imageSize) . " bytes");
-        }
-
-        // check if image is valid pixel-wise.
-        $pixel = $this->getPixels($fileToUpload["tmp_name"]);
-        
-        if($pixel["width"] < 4 || $pixel["height"] < 4){
-            throw new ImageUploaderException("This file is either too small or corrupted to be an image");
-        }
-
-        if($pixel["height"] > $this->imageDimension["height"] || 
-            $pixel["width"] > $this->imageDimension["width"])
-        {
-            throw new ImageUploaderException("Image pixels/size must be below ". 
-                implode(", ", $this->imageDimension). " pixels");
-        }
-
-        // Assign given name or generate a new one.
-        $newFileName = $this->imageRename($isNameProvided);
-
-        // create upload directory if it does not exist
-        $this->uploadDir($this->uploadDir);
-
-        // watermark, shrink and crop 
-        $this->applyWatermark($fileToUpload["tmp_name"]);
-        $this->applyShrink($fileToUpload["tmp_name"], $fileToUpload["tmp_name"]);
-        $this->applyCrop($fileToUpload["tmp_name"], $fileToUpload["tmp_name"]);
-
-        // Upload the file
-        $moveUploadedFile = $this->moveUploadedFile($fileToUpload["tmp_name"], $this->uploadDir . "/" . $newFileName);
-
-        if ($moveUploadedFile) {
-            return $this->uploadDir . "/" . $newFileName; 
-        }else{
-            throw new ImageUploaderException(" File could not be uploaded. Unknown error occurred. ");
-        }
-    }
-
-    public function moveUploadedFile($uploaded_file, $new_file) {
-        return move_uploaded_file($uploaded_file, $new_file);
+        return move_uploaded_file($tmp_name, $destination);
     }
 }
